@@ -50,13 +50,17 @@ The setup that actually works: **install the CLI natively inside the container**
 ### 1. Dockerfile
 
 ```dockerfile
-FROM docker.n8n.io/n8nio/n8n:latest
+FROM n8nio/n8n:latest
 USER root
 RUN npm install -g @anthropic-ai/claude-code
+RUN ln -s $(npm config get prefix)/bin/claude /usr/local/bin/claude
 USER node
 ```
 
-`npm` automatically resolves the correct platform build (e.g. `@anthropic-ai/claude-code-linux-arm64-musl`), so this works natively inside Alpine without any host binary involved.
+Notes on each line:
+- **`FROM n8nio/n8n:latest`** — use the plain Docker Hub path, not `docker.n8n.io/n8nio/n8n:latest`. The `docker.n8n.io` mirror is still backed by Docker Hub's anonymous pull quota and hits `429 Too Many Requests` far more easily on shared-IP VPS hosts. If you still hit the rate limit, `docker login` first — authenticated pulls get a much higher quota.
+- **`npm install -g @anthropic-ai/claude-code`** — `npm` automatically resolves the correct platform build (e.g. `@anthropic-ai/claude-code-linux-arm64-musl`), so this works natively inside Alpine without any host binary involved.
+- **The `ln -s` line is required.** The official n8n image installs Node.js to a custom path (e.g. `/opt/nodejs/node-v24.15.0/`), not the standard `/usr/local`. `npm install -g` puts the `claude` binary in that custom path's `bin/`, which isn't necessarily resolved by every shell/PATH context the container or n8n's Execute Command node uses. Symlinking it into `/usr/local/bin` (which the image does keep on `PATH`) makes plain `claude` resolve everywhere reliably. Without this, `which claude` returns nothing even though the install succeeded — check with `npm list -g --depth=0` and look for the `@anthropic-ai/claude-code` line's containing prefix if you ever need to re-locate it manually.
 
 ### 2. docker-compose.yml
 
@@ -68,6 +72,7 @@ services:
       dockerfile: Dockerfile
     environment:
       - N8N_COMMUNITY_NODES_ENABLED=true
+      - DISABLE_AUTOUPDATER=1    # see note below
       # ... your other n8n env vars
     volumes:
       - n8n_data:/home/node/.n8n
@@ -82,12 +87,24 @@ volumes:
 
 Named volumes (not bind mounts) avoid both problems above: they're directories the container fully owns, immune to the host-rewrite/inode issue, and they persist across redeploys.
 
+`DISABLE_AUTOUPDATER=1` silences a (harmless but noisy) "Can't auto-update: npm global folder isn't writable" warning from `claude /doctor`. The CLI normally self-updates in place; inside a container that's pointless since any self-update is wiped out the next time the container is recreated from the image — updates should happen by bumping the version in the Dockerfile's `npm install` and rebuilding, not by letting the CLI patch itself live.
+
+If you're using a stack manager (Portainer, Dockge, etc.) that pulls images rather than building them, either:
+- point it at a `build:` block as above (preferred — it builds automatically on deploy), or
+- build the image manually (`docker build -t n8n-claude:latest .`) and reference `image: n8n-claude:latest` with `pull_policy: never` added under it, so the manager doesn't try to pull a same-named image from a registry where it doesn't exist (`pull access denied for n8n-claude` is the symptom of skipping this).
+
 ### 3. Build and deploy
 
 ```bash
 docker build -t n8n-claude:latest .
 docker compose up -d
 ```
+
+**Rebuilding the image alone does not update an already-running container.** Docker pins a running container to the image ID it started with. After any Dockerfile change, recreate the container, not just rebuild the image:
+```bash
+docker compose down && docker compose up -d
+```
+(`docker inspect <container> --format '{{.Config.Image}}'` tells you which image tag a running container actually thinks it's using, if you want to confirm before/after.)
 
 ### 4. Fix volume ownership (one-time)
 
