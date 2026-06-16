@@ -124,9 +124,8 @@ Type `/login` at the prompt, complete the browser-based OAuth flow (it'll give y
 Verify it persisted with a **fresh** exec session (important — this confirms it was actually written to disk, not just held in memory for that one session):
 ```bash
 docker exec -it <container_name> sh -c 'HOME=/home/node claude -p "say OK"; echo EXIT:$?'
-# should print: OK
-#               EXIT:0
 ```
+This should print `OK` followed by `EXIT:0`.
 
 ### 6. Set up the n8n credential
 
