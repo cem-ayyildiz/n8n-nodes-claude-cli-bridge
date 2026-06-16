@@ -1,43 +1,58 @@
 # n8n-nodes-claude-cli-bridge
 
-Custom n8n node for the [claude-cli-bridge](../../bridges/claude-cli-bridge). Wraps the bridge's `/ask` endpoint as a native "Claude CLI Bridge" node instead of a generic HTTP Request node.
+n8n community node that calls the locally-installed, subscription-authenticated `claude` CLI directly from inside the n8n process — no Anthropic API key, no separate server to run.
 
 ## Why
 
-The bridge is already callable from n8n via an HTTP Request node. This package exists for workflows that want:
-- A typed UI (Prompt / Model / Attach PDF fields) instead of hand-built JSON bodies
-- A reusable credential (`Claude CLI Bridge API` → base URL) shared across workflows/nodes
-- A single node abstraction so the double-wrapped-JSON quirk and PDF base64 encoding don't have to be re-implemented per workflow
+The official Anthropic n8n node requires an API key (pay-per-token billing). This node instead shells out to the `claude` CLI that's already logged in on the machine (via `claude login`), so usage rides your Claude subscription (Pro/Max/Team) instead.
 
-## Install (community node, self-hosted n8n)
+## How it works
+
+There is no bridge/server process. The node's `execute()` runs `claude -p "<prompt>"` as a child process of the n8n worker itself and returns `{ success, output, error }`. This means:
+
+- **n8n running on bare metal/VM** (no Docker): works out of the box as long as `claude` is on `PATH` and logged in as the user running n8n.
+- **n8n running in Docker**: the container needs access to (a) the `claude` binary and (b) the `~/.claude` credentials directory created by `claude login` on the host. See below.
+
+## Install
 
 ```bash
 npm install n8n-nodes-claude-cli-bridge
 ```
 
-Or for local development against this repo, point n8n's custom extensions dir at this package and build it:
+Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-claude-cli-bridge`.
 
-```bash
-cd connectors/n8n-nodes/n8n-nodes-claude-cli-bridge
-npm install
-npm run build
-```
+## Credential: Claude CLI
 
-Then in n8n: **Settings → Community Nodes → Install**, or set `N8N_CUSTOM_EXTENSIONS` to include this package's parent directory before starting n8n.
+| Field | Description |
+|---|---|
+| CLI Path | Path to the `claude` binary, or just `claude` if it's on `PATH`. Falls back to the `CLAUDE_CLI_PATH` env var, then `"claude"`. |
+| Home Directory | Directory containing `.claude/` with your login credentials. Leave empty to use the process `HOME`. Set this for the Docker setup below. |
 
-## Credential
-
-**Claude CLI Bridge API**
-- `Base URL` — e.g. `http://localhost:3456`, or `http://host.docker.internal:3456` when n8n runs in Docker and the bridge runs on the host.
-
-## Node: Claude CLI Bridge
+## Node: Claude CLI
 
 | Field | Description |
 |---|---|
 | Prompt | Text sent to `claude -p` |
 | Model | Optional `--model` override |
-| Attach PDF | If enabled, reads a binary input field, base64-encodes it, and sends it as `pdf_base64` |
+| Attach PDF | Extracts text from a binary PDF input (via `pdftotext`, if installed) and appends it to the prompt |
 | Input Binary Field | Name of the binary property holding the PDF (default `data`) |
-| Timeout (ms) | HTTP request timeout from n8n's side |
+| Timeout (ms) | Kills the `claude` process if it runs longer than this |
 
-Output is the bridge's raw response: `{ success, output, error }`.
+## Running n8n in Docker
+
+The CLI and its login credentials must be reachable from inside the n8n container:
+
+```yaml
+services:
+  n8n:
+    image: n8nio/n8n
+    environment:
+      - CLAUDE_CLI_PATH=/usr/local/bin/claude
+    volumes:
+      - /usr/local/bin/claude:/usr/local/bin/claude:ro   # the CLI binary
+      - ~/.claude:/home/node/.claude:ro                   # your login credentials
+```
+
+Then in the credential, set **Home Directory** to `/home/node` (or wherever you mounted `.claude`). No separate bridge container is needed — the CLI runs directly as a child process of the n8n container itself.
+
+If the host's `claude` binary depends on a Node.js runtime not present in the n8n image, install the `claude` CLI directly inside a custom n8n image instead of bind-mounting the binary.

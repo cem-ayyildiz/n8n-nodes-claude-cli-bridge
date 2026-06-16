@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-claude-cli-bridge",
-  "version": "0.1.0",
-  "description": "n8n community node for calling the claude-cli-bridge HTTP server (authenticated local Claude CLI, no API key)",
+  "version": "0.2.0",
+  "description": "n8n community node that calls the locally-installed, subscription-authenticated Claude CLI directly — no Anthropic API key, no separate server process",
   "keywords": [
     "n8n-community-node-package",
     "claude",
@@ -41,6 +41,7 @@
     "dev": "tsc --watch"
   },
   "devDependencies": {
+    "@types/node": "^20.14.0",
     "n8n-workflow": "^1.60.0",
     "typescript": "^5.5.0"
   },

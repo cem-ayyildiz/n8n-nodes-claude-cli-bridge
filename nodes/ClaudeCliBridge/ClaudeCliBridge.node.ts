@@ -1,3 +1,9 @@
+import { execFile, ExecFileException } from 'child_process';
+import { promisify } from 'util';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs/promises';
+
 import {
 	IExecuteFunctions,
 	INodeExecutionData,
@@ -8,17 +14,54 @@ import {
 	NodeOperationError,
 } from 'n8n-workflow';
 
+const execFileAsync = promisify(execFile);
+
+function runClaude(
+	cliPath: string,
+	args: string[],
+	options: { timeout: number; env: NodeJS.ProcessEnv },
+): Promise<{ stdout: string; stderr: string }> {
+	return new Promise((resolve, reject) => {
+		const child = execFile(
+			cliPath,
+			args,
+			{ timeout: options.timeout, maxBuffer: 1024 * 1024 * 10, env: options.env },
+			(error: ExecFileException | null, stdout: string, stderr: string) => {
+				if (error) {
+					reject(error);
+					return;
+				}
+				resolve({ stdout, stderr });
+			},
+		);
+		child.stdin?.end();
+	});
+}
+
+async function extractPdfText(pdfBuffer: Buffer, maxChars = 4000): Promise<string | null> {
+	const tmpFile = path.join(os.tmpdir(), `claude-cli-bridge-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
+	try {
+		await fs.writeFile(tmpFile, pdfBuffer);
+		const { stdout } = await execFileAsync('pdftotext', [tmpFile, '-'], { maxBuffer: 1024 * 1024 * 10 });
+		return stdout.trim().slice(0, maxChars);
+	} catch {
+		return null;
+	} finally {
+		await fs.unlink(tmpFile).catch(() => {});
+	}
+}
+
 export class ClaudeCliBridge implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Claude CLI Bridge',
+		displayName: 'Claude CLI',
 		name: 'claudeCliBridge',
 		icon: 'fa:robot',
 		group: ['transform'],
 		version: 1,
 		subtitle: '={{$parameter["prompt"].substring(0,50)}}',
 		description:
-			'Call a locally-installed, authenticated Claude CLI via the claude-cli-bridge HTTP server',
-		defaults: { name: 'Claude CLI Bridge' },
+			'Call the locally-installed, subscription-authenticated Claude CLI directly (no Anthropic API key)',
+		defaults: { name: 'Claude CLI' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [
@@ -43,15 +86,15 @@ export class ClaudeCliBridge implements INodeType {
 				type: 'string',
 				default: '',
 				placeholder: 'claude-sonnet-4-6',
-				description:
-					'Optional model id passed as --model. Leave empty for the CLI default (the bridge defaults to Haiku when a PDF is attached and no model is set).',
+				description: 'Optional model id passed as --model. Leave empty for the CLI default.',
 			},
 			{
 				displayName: 'Attach PDF',
 				name: 'attachPdf',
 				type: 'boolean',
 				default: false,
-				description: 'Whether to attach a PDF from binary input data to the prompt',
+				description:
+					'Whether to extract text from a PDF in binary input data (via pdftotext) and append it to the prompt',
 			},
 			{
 				displayName: 'Input Binary Field',
@@ -66,8 +109,7 @@ export class ClaudeCliBridge implements INodeType {
 				name: 'timeout',
 				type: 'number',
 				default: 120000,
-				description:
-					'Request timeout in milliseconds. The bridge itself stops waiting on the CLI after 120s.',
+				description: 'Kill the claude process if it has not finished within this time',
 			},
 		],
 	};
@@ -76,32 +118,35 @@ export class ClaudeCliBridge implements INodeType {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
 		const credentials = await this.getCredentials('claudeCliBridgeApi');
-		const baseUrl = (credentials.baseUrl as string).replace(/\/+$/, '');
+		const cliPath = (credentials.cliPath as string) || process.env.CLAUDE_CLI_PATH || 'claude';
+		const homeDir = (credentials.homeDir as string) || process.env.HOME;
 
 		for (let i = 0; i < items.length; i++) {
-			const prompt = this.getNodeParameter('prompt', i) as string;
+			let prompt = this.getNodeParameter('prompt', i) as string;
 			const model = this.getNodeParameter('model', i) as string;
 			const attachPdf = this.getNodeParameter('attachPdf', i) as boolean;
 			const timeout = this.getNodeParameter('timeout', i) as number;
 
-			const body: Record<string, unknown> = { prompt };
-			if (model) body.model = model;
-
 			if (attachPdf) {
 				const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i) as string;
 				const binaryDataBuffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
-				body.pdf_base64 = binaryDataBuffer.toString('base64');
+				const pdfText = await extractPdfText(binaryDataBuffer);
+				if (pdfText) {
+					prompt = `${prompt}\n\nPDF content:\n${pdfText}`;
+				}
 			}
 
+			const args = [...(model ? ['--model', model] : []), '-p', prompt];
+
 			try {
-				const response = await this.helpers.httpRequest({
-					method: 'POST',
-					url: `${baseUrl}/ask`,
-					body,
-					json: true,
+				const { stdout, stderr } = await runClaude(cliPath, args, {
 					timeout,
+					env: { ...process.env, HOME: homeDir },
 				});
-				returnData.push({ json: response as IDataObject, pairedItem: { item: i } });
+				returnData.push({
+					json: { success: true, output: stdout.trim(), error: stderr.trim() } as IDataObject,
+					pairedItem: { item: i },
+				});
 			} catch (error) {
 				if (this.continueOnFail()) {
 					returnData.push({
