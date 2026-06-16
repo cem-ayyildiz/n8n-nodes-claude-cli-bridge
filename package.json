@@ -1,0 +1,50 @@
+{
+  "name": "n8n-nodes-claude-cli-bridge",
+  "version": "0.1.0",
+  "description": "n8n community node for calling the claude-cli-bridge HTTP server (authenticated local Claude CLI, no API key)",
+  "keywords": [
+    "n8n-community-node-package",
+    "claude",
+    "anthropic",
+    "claude-code"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/cem-ayyildiz/n8n-nodes-claude-cli-bridge",
+  "author": {
+    "name": "Cem Ayyildiz"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cem-ayyildiz/n8n-nodes-claude-cli-bridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cem-ayyildiz/n8n-nodes-claude-cli-bridge/issues"
+  },
+  "engines": {
+    "node": ">=18.10"
+  },
+  "main": "index.js",
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/ClaudeCliBridgeApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/ClaudeCliBridge/ClaudeCliBridge.node.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "n8n-workflow": "^1.60.0",
+    "typescript": "^5.5.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}
