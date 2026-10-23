@@ -1,0 +1,29 @@
+name: Publish
+
+# Pushing a tag such as v0.3.1 publishes that version to npm with a provenance
+# statement. Authentication is npm trusted publishing (OIDC): npmjs.com trusts
+# this repository and this workflow file, so no npm token is stored here.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@^11.5.1
+      - run: npm ci
+      - name: Tag must match package.json version
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm run build
+      - run: npm publish --provenance --access public

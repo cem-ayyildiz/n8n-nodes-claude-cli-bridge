@@ -2,6 +2,16 @@
 
 n8n community node that calls the locally-installed, subscription-authenticated `claude` CLI directly from inside the n8n process — no Anthropic API key, no separate server to run.
 
+**It takes attachments.** Images (JPEG, PNG, GIF, WEBP), PDFs and text files on the incoming item go to Claude as they are. Claude reads the photo or the PDF pages itself, not an OCR result or a `pdftotext` extraction, so a receipt, an invoice or a scanned form can be read in one step:
+
+| Without attachments | With this node |
+|---|---|
+| file → OCR → text → Claude | file → Claude |
+| Claude sees only what the OCR kept | Claude sees the page itself, layout included |
+| a line the OCR drops is lost | nothing in between to drop it |
+
+Pick the binary fields to send (or all of them), ask for JSON, and the parsed answer comes back in `data`.
+
 ## Why
 
 The official Anthropic n8n node requires an API key (pay-per-token billing). This node instead shells out to the `claude` CLI, authenticated via `claude login`/`claude /login`, so usage rides your Claude subscription (Pro/Max/Team) instead.
@@ -23,6 +33,14 @@ npm install n8n-nodes-claude-cli-bridge
 ```
 
 Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-claude-cli-bridge`.
+
+### Requirements
+
+- Self-hosted n8n with community nodes enabled. The node runs a program on the n8n host, so it is for self-hosted use only and cannot become an n8n-verified node.
+- The `claude` CLI (Claude Code) on the machine or container that runs n8n, logged in with a Claude subscription, or given a token from `claude setup-token` (credential field *OAuth Token*, or `CLAUDE_CODE_OAUTH_TOKEN` on the n8n process).
+- Node version 2 needs a CLI that accepts `--input-format stream-json`, `--strict-mcp-config`, `--setting-sources` and `--disable-slash-commands`. Tested with Claude Code 2.1.301 and 2.1.304. Version 1 only needs `claude -p`.
+
+**Security.** The CLI runs with the permissions of the n8n process. With *Tools = None* (the default) it is a pure model call: no built-in tools, MCP servers, settings files, hooks or skills. *CLI Defaults* gives the model whatever the CLI user has configured, including tools that read and write files or run commands, so use it only with prompts you trust.
 
 ## Credential: Claude CLI
 
@@ -169,4 +187,23 @@ This should print `OK` followed by `EXIT:0`.
 - CLI Path: leave empty
 - Home Directory: `/home/node`
 
+Instead of the interactive login in step 5 you can create a long-lived token with `claude setup-token` and put it in the credential's *OAuth Token* field (or set `CLAUDE_CODE_OAUTH_TOKEN` on the container).
+
 That's it — the node now runs fully self-contained inside the n8n container, authenticated against your Claude subscription, with no host dependency and no separate server.
+
+## Changelog
+
+### 0.3.1
+- *Effort* option, passed to the CLI as `--effort` (low, medium, high, xhigh, max).
+
+### 0.3.0
+- Node version 2 (default for new nodes): images (JPEG, PNG, GIF, WEBP), PDFs and text files go to Claude as they are, through `--input-format stream-json`. The file type is detected from the bytes. Images up to 32 MB (the CLI downsizes large images itself); PDFs up to 32 MB, with any bytes before the `%PDF-` header dropped.
+- *Tools = None* by default: a pure model call with no tools, MCP servers, settings files or skills.
+- *Response Format = JSON* parses the answer into `data`.
+- Output carries model, duration, cost, token usage and per-attachment info.
+- Timeout and cancel stop the CLI process (SIGTERM, then SIGKILL after 5 s).
+- Credential: optional *Config Directory* and *OAuth Token*.
+- Version 1 nodes behave exactly as before.
+
+### 0.2.3
+- Version 1: `claude -p "<prompt>"`, optional `pdftotext` extraction of a PDF.

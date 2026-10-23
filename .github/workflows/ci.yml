@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Check what the npm package would contain
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const files = require('./pack.json')[0].files.map(f => f.path);
+            const bad = files.filter(p => /\.(map|tsbuildinfo)$/.test(p) || !/^(dist\/|README\.md$|LICENSE$|package\.json$)/.test(p));
+            console.log(files.join('\n'));
+            if (bad.length) { console.error('Unexpected files in the package:', bad); process.exit(1); }
+          "
