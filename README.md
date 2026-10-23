@@ -2,7 +2,7 @@
 
 n8n community node that calls the locally-installed, subscription-authenticated `claude` CLI directly from inside the n8n process — no Anthropic API key, no separate server to run.
 
-**It takes attachments.** Images (JPEG, PNG, GIF, WEBP), PDFs and text files on the incoming item go to Claude as they are. Claude reads the photo or the PDF pages itself, not an OCR result or a `pdftotext` extraction, so a receipt, an invoice or a scanned form can be read in one step:
+**It takes attachments.** Images (JPEG, PNG, GIF, WEBP, and HEIC/AVIF phone photos, converted to JPEG on the way), PDFs and text files on the incoming item go to Claude as they are. Claude reads the photo or the PDF pages itself, not an OCR result or a `pdftotext` extraction, so a receipt, an invoice or a scanned form can be read in one step:
 
 | Without attachments | With this node |
 |---|---|
@@ -38,6 +38,7 @@ Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-c
 
 - Self-hosted n8n with community nodes enabled. The node runs a program on the n8n host, so it is for self-hosted use only and cannot become an n8n-verified node.
 - The `claude` CLI (Claude Code) on the machine or container that runs n8n, logged in with a Claude subscription, or given a token from `claude setup-token` (credential field *OAuth Token*, or `CLAUDE_CODE_OAUTH_TOKEN` on the n8n process).
+- For HEIC/AVIF attachments: GraphicsMagick (`gm`) with HEIF support. The official n8n Docker image includes it (the Edit Image node uses it); everything else works without it.
 - Node version 2 needs a CLI that accepts `--input-format stream-json`, `--strict-mcp-config`, `--setting-sources` and `--disable-slash-commands`. Tested with Claude Code 2.1.301 and 2.1.304. Version 1 only needs `claude -p`.
 
 **Security.** The CLI runs with the permissions of the n8n process. With *Tools = None* (the default) it is a pure model call: no built-in tools, MCP servers, settings files, hooks or skills. *CLI Defaults* gives the model whatever the CLI user has configured, including tools that read and write files or run commands, so use it only with prompts you trust.
@@ -64,6 +65,8 @@ Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-c
 | Options → System Prompt / Mode | Appended to, or replacing, Claude Code's default system prompt |
 | Options → Tools | `None (Pure Model Call)` (default) or `CLI Defaults` |
 | Options → Effort | `--effort`: CLI default, low, medium, high, xhigh or max. Higher is slower and uses more quota |
+| Options → Retries / Retry Wait (ms) | Run the CLI again (up to 5 times, default 0) when it fails or, with Response Format = JSON, when the answer is not valid JSON. Works with *Continue On Fail* too, which n8n's own *Retry On Fail* does not. File and setup errors are not retried |
+| Options → Convert HEIC/AVIF / GraphicsMagick Path | Convert HEIC/HEIF/AVIF attachments to JPEG with `gm` (default on, path `gm`) |
 | Options → Max Turns, Timeout, Working Directory, Keep Binary Data | as named |
 
 **Attachments.** The type is detected from the file bytes, not the declared mime type (mobile/web uploads often label every file `image/jpeg`, a PDF included):
@@ -73,11 +76,11 @@ Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-c
 | JPEG, PNG, GIF, WEBP | image block (the CLI downsizes large images itself; tested up to 29 MB) | 32 MB per image |
 | PDF | document block (Claude sees the pages). Bytes before the `%PDF-` header (allowed in the first 1 KB) are dropped; the API cannot read the file with them. | 32 MB |
 | `text/*`, JSON, CSV, XML, YAML (by declared mime) | text document block | 2 MB |
-| HEIC / AVIF | rejected with a hint to convert to JPEG (Edit Image node) | |
+| HEIC / HEIF / AVIF | converted to JPEG with GraphicsMagick (rotation from the HEIF container applied), then an image block. Without `gm`, or with conversion off, the item fails with a message saying so | 32 MB |
 
 **Tools = None** runs the CLI with `--tools "" --strict-mcp-config --setting-sources "" --disable-slash-commands`: no built-in tools, no MCP servers, no settings files (so no hooks), no skills. Without this the CLI inherits whatever its user configured; on a workstation with several MCP servers a one-line answer took 26 s instead of ~3 s.
 
-**Output** (`json`): `success`, `output` (answer text), `data` (parsed JSON, when asked), `model`, `durationMs`, `costUsd`, `usage`, `attachments` (`field`, `fileName`, `kind`, `mediaType`, `bytes`). Input binary data is passed through unless *Keep Binary Data* is off. With *Continue On Fail*, errors come back as `success: false` with `error`.
+**Output** (`json`): `success`, `output` (answer text), `data` (parsed JSON, when asked), `model`, `durationMs`, `costUsd`, `usage`, `attempts`, `attachments` (`field`, `fileName`, `kind`, `mediaType`, `bytes`, `convertedFrom` for HEIC/AVIF). Input binary data is passed through unless *Keep Binary Data* is off. With *Continue On Fail*, errors come back as `success: false` with `error`.
 
 ### Version 1
 
@@ -192,6 +195,13 @@ Instead of the interactive login in step 5 you can create a long-lived token wit
 That's it — the node now runs fully self-contained inside the n8n container, authenticated against your Claude subscription, with no host dependency and no separate server.
 
 ## Changelog
+
+### 1.0.0
+- HEIC/HEIF/AVIF attachments (iPhone photos) are converted to JPEG with GraphicsMagick instead of being rejected. Options *Convert HEIC/AVIF* and *GraphicsMagick Path*.
+- *Retries* and *Retry Wait (ms)*: run the CLI again after a failure or an answer that is not valid JSON, also under *Continue On Fail*. Output carries `attempts`.
+- No dependencies at all: `n8n-workflow` is no longer a peer dependency, and nothing from it is loaded at run time (types only). Installing the package no longer adds or changes an `n8n-workflow` copy in n8n's community-node folder.
+- Errors are thrown as plain errors (n8n wraps them); with several items the message ends with `[item N]`.
+- 1.0.0: node version 2 is stable.
 
 ### 0.3.1
 - *Effort* option, passed to the CLI as `--effort` (low, medium, high, xhigh, max).
