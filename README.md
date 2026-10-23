@@ -45,6 +45,7 @@ Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-c
 | Response Format | `Text`, or `JSON`: the answer is parsed into `data` (a ```` ```json ```` fence or surrounding prose is tolerated) |
 | Options → System Prompt / Mode | Appended to, or replacing, Claude Code's default system prompt |
 | Options → Tools | `None (Pure Model Call)` (default) or `CLI Defaults` |
+| Options → Effort | `--effort`: CLI default, low, medium, high, xhigh or max. Higher is slower and uses more quota |
 | Options → Max Turns, Timeout, Working Directory, Keep Binary Data | as named |
 
 **Attachments.** The type is detected from the file bytes, not the declared mime type (mobile/web uploads often label every file `image/jpeg`, a PDF included):

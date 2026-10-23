@@ -47,6 +47,7 @@ export function buildStreamArgs(o: {
 	systemPromptMode?: 'append' | 'replace';
 	pureInference: boolean;
 	maxTurns?: number;
+	effort?: string;
 }): string[] {
 	const args = [
 		'--print',
@@ -61,6 +62,7 @@ export function buildStreamArgs(o: {
 	}
 	if (o.pureInference) args.push(...PURE_INFERENCE_ARGS);
 	if (o.maxTurns && o.maxTurns > 0) args.push('--max-turns', String(o.maxTurns));
+	if (o.effort) args.push('--effort', o.effort);
 	return args;
 }
 

@@ -217,6 +217,21 @@ export class ClaudeCliBridge implements INodeType {
 						],
 					},
 					{
+						displayName: 'Effort',
+						name: 'effort',
+						type: 'options',
+						default: '',
+						options: [
+							{ name: 'CLI Default', value: '' },
+							{ name: 'Low', value: 'low' },
+							{ name: 'Medium', value: 'medium' },
+							{ name: 'High', value: 'high' },
+							{ name: 'Extra High', value: 'xhigh' },
+							{ name: 'Max', value: 'max' },
+						],
+						description: 'Passed as --effort: how much the model thinks before answering. Higher is slower and uses more of the subscription quota.',
+					},
+					{
 						displayName: 'Max Turns',
 						name: 'maxTurns',
 						type: 'number',
@@ -362,6 +377,7 @@ async function executeV2(this: IExecuteFunctions): Promise<INodeExecutionData[][
 				systemPromptMode: (options.systemPromptMode as 'append' | 'replace') || 'append',
 				pureInference: (options.toolsMode || 'none') === 'none',
 				maxTurns: options.maxTurns as number | undefined,
+				effort: (options.effort as string) || undefined,
 			});
 			const r = await runClaudeStream({
 				cliPath,
