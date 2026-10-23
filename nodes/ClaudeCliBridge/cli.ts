@@ -39,6 +39,8 @@ export class CliError extends Error {
 // server starting up and a 26 s round trip for a one-line answer.
 export const PURE_INFERENCE_ARGS = ['--tools', '', '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands'];
 
+const KILL_GRACE_MS = 5000;
+
 export function buildStreamArgs(o: {
 	model?: string;
 	systemPrompt?: string;
@@ -79,12 +81,20 @@ export function runClaudeStream(p: StreamRunParams): Promise<StreamRunResult> {
 
 		const child = spawn(p.cliPath, p.args, { env: p.env, cwd: p.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
 
-		const timer = setTimeout(() => {
+		// SIGTERM first; a process that is still there after the grace period
+		// gets SIGKILL, so a hung CLI cannot outlive the execution.
+		const stop = () => {
 			child.kill('SIGTERM');
+			setTimeout(() => {
+				if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+			}, KILL_GRACE_MS).unref();
+		};
+		const timer = setTimeout(() => {
+			stop();
 			finish(() => reject(new CliError(`claude did not finish within ${p.timeoutMs} ms`, stderr)));
 		}, p.timeoutMs);
 		const onAbort = () => {
-			child.kill('SIGTERM');
+			stop();
 			finish(() => reject(new CliError('Execution was cancelled', stderr)));
 		};
 		if (p.signal) {

@@ -9,6 +9,8 @@ export type AttachmentKind = 'image' | 'pdf' | 'text';
 export interface SniffResult {
 	kind: AttachmentKind;
 	mediaType: string;
+	// Bytes to drop before the content starts (a PDF header after leading junk).
+	offset?: number;
 }
 
 export interface AttachmentInfo {
@@ -19,8 +21,10 @@ export interface AttachmentInfo {
 	bytes: number;
 }
 
-// API limits (Messages API): 5 MB per image, 32 MB per PDF request.
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+// The Messages API takes at most 5 MB per image, but the CLI downsizes large
+// images before sending them: a 29 MB JPEG went through on CLI 2.1.301 and
+// 2.1.304. The image limit here only keeps memory in check, like the PDF one.
+export const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 export const MAX_PDF_BYTES = 32 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 
@@ -40,7 +44,12 @@ export function sniff(buf: Buffer, declaredMime?: string): SniffResult {
 	if (b.length >= 12 && b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP') {
 		return { kind: 'image', mediaType: 'image/webp' };
 	}
-	if (b.length >= 5 && b.subarray(0, 5).toString('latin1') === '%PDF-') return { kind: 'pdf', mediaType: 'application/pdf' };
+	// The PDF spec allows the header anywhere in the first 1024 bytes (mail
+	// gateways and scanners sometimes prepend a few). The API cannot read such a
+	// file as is -- the CLI does not fail, the model just never sees the pages --
+	// so toContentBlock drops the bytes before the header.
+	const pdfAt = b.subarray(0, 1024).indexOf('%PDF-', 0, 'latin1');
+	if (pdfAt >= 0) return { kind: 'pdf', mediaType: 'application/pdf', ...(pdfAt > 0 ? { offset: pdfAt } : {}) };
 	if (b.length >= 12 && b.subarray(4, 8).toString('latin1') === 'ftyp') {
 		const brand = b.subarray(8, 12).toString('latin1');
 		if (/^(heic|heix|hevc|hevx|mif1|msf1|avif)$/.test(brand)) {
@@ -59,7 +68,7 @@ export function toContentBlock(buf: Buffer, s: SniffResult, title?: string): Rec
 	if (s.kind === 'image') {
 		if (buf.length > MAX_IMAGE_BYTES) {
 			throw new AttachmentError(
-				`Image is ${(buf.length / 1048576).toFixed(1)} MB; Claude accepts at most 5 MB per image. Resize it first.`,
+				`Image is ${(buf.length / 1048576).toFixed(1)} MB; the limit here is 32 MB. Resize it first.`,
 			);
 		}
 		return { type: 'image', source: { type: 'base64', media_type: s.mediaType, data: buf.toString('base64') } };
@@ -68,9 +77,10 @@ export function toContentBlock(buf: Buffer, s: SniffResult, title?: string): Rec
 		if (buf.length > MAX_PDF_BYTES) {
 			throw new AttachmentError(`PDF is ${(buf.length / 1048576).toFixed(1)} MB; Claude accepts at most 32 MB.`);
 		}
+		const pdf = s.offset ? buf.subarray(s.offset) : buf;
 		const block: Record<string, unknown> = {
 			type: 'document',
-			source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
+			source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') },
 		};
 		if (title) block.title = title;
 		return block;

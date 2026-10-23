@@ -373,7 +373,12 @@ async function executeV2(this: IExecuteFunctions): Promise<INodeExecutionData[][
 				signal,
 			});
 			output = r.text;
-			if (r.isError) throw new CliError(`Claude returned an error (${r.subtype}): ${r.text}`, r.stderr);
+			if (r.isError) {
+				// An auth failure comes back as subtype 'success' with is_error set;
+				// only a real error subtype (error_max_turns, ...) is worth naming.
+				const kind = r.subtype && r.subtype !== 'success' ? ` (${r.subtype})` : '';
+				throw new CliError(`Claude CLI reported an error${kind}: ${r.text || 'no message'}`, r.stderr);
+			}
 
 			const json: IDataObject = {
 				success: true,

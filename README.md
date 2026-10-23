@@ -51,8 +51,8 @@ Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-c
 
 | Detected | Sent as | Limit |
 |---|---|---|
-| JPEG, PNG, GIF, WEBP | image block | 5 MB per image |
-| PDF | document block (Claude sees the pages) | 32 MB |
+| JPEG, PNG, GIF, WEBP | image block (the CLI downsizes large images itself; tested up to 29 MB) | 32 MB per image |
+| PDF | document block (Claude sees the pages). Bytes before the `%PDF-` header (allowed in the first 1 KB) are dropped; the API cannot read the file with them. | 32 MB |
 | `text/*`, JSON, CSV, XML, YAML (by declared mime) | text document block | 2 MB |
 | HEIC / AVIF | rejected with a hint to convert to JPEG (Edit Image node) | |
 
