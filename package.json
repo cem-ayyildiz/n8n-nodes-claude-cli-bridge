@@ -1,12 +1,19 @@
 {
   "name": "n8n-nodes-claude-cli-bridge",
-  "version": "0.2.3",
-  "description": "n8n community node that calls the locally-installed, subscription-authenticated Claude CLI directly — no Anthropic API key, no separate server process",
+  "version": "0.3.1",
+  "description": "n8n community node for the locally-installed, subscription-authenticated Claude CLI that takes attachments: images and PDFs go to Claude as they are, so Claude reads the photo or the PDF pages itself. No Anthropic API key, no separate server.",
   "keywords": [
     "n8n-community-node-package",
     "claude",
     "anthropic",
-    "claude-code"
+    "claude-code",
+    "vision",
+    "pdf",
+    "attachments",
+    "image",
+    "multimodal",
+    "ocr",
+    "document"
   ],
   "license": "MIT",
   "homepage": "https://github.com/cem-ayyildiz/n8n-nodes-claude-cli-bridge",
@@ -23,9 +30,10 @@
   "engines": {
     "node": ">=18.10"
   },
-  "main": "index.js",
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo"
   ],
   "n8n": {
     "n8nNodesApiVersion": 1,
@@ -38,7 +46,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
