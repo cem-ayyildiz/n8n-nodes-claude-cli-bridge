@@ -28,10 +28,16 @@ export interface StreamRunResult {
 }
 
 export class CliError extends Error {
-	constructor(message: string, public readonly stderr: string = '') {
+	constructor(
+		message: string,
+		public readonly stderr: string = '',
+		public readonly cancelled: boolean = false,
+	) {
 		super(message);
 	}
 }
+
+export class JsonParseError extends Error {}
 
 // Isolation for a pure model call: no built-in tools, no MCP servers, no
 // settings files (so no hooks), no skills. Without these the CLI inherits
@@ -97,7 +103,7 @@ export function runClaudeStream(p: StreamRunParams): Promise<StreamRunResult> {
 		}, p.timeoutMs);
 		const onAbort = () => {
 			stop();
-			finish(() => reject(new CliError('Execution was cancelled', stderr)));
+			finish(() => reject(new CliError('Execution was cancelled', stderr, true)));
 		};
 		if (p.signal) {
 			if (p.signal.aborted) onAbort();
@@ -201,5 +207,5 @@ export function extractJson(text: string): unknown {
 			}
 		}
 	}
-	throw new Error('The answer did not contain valid JSON');
+	throw new JsonParseError('The answer did not contain valid JSON');
 }

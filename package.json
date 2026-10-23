@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-claude-cli-bridge",
-  "version": "0.3.1",
+  "version": "1.0.0",
   "description": "n8n community node for the locally-installed, subscription-authenticated Claude CLI that takes attachments: images and PDFs go to Claude as they are, so Claude reads the photo or the PDF pages itself. No Anthropic API key, no separate server.",
   "keywords": [
     "n8n-community-node-package",
@@ -13,7 +13,8 @@
     "image",
     "multimodal",
     "ocr",
-    "document"
+    "document",
+    "heic"
   ],
   "license": "MIT",
   "homepage": "https://github.com/cem-ayyildiz/n8n-nodes-claude-cli-bridge",
@@ -53,8 +54,5 @@
     "@types/node": "^20.14.0",
     "n8n-workflow": "^1.60.0",
     "typescript": "^5.5.0"
-  },
-  "peerDependencies": {
-    "n8n-workflow": "*"
   }
 }

@@ -4,18 +4,36 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
-import {
-	IExecuteFunctions,
-	INodeExecutionData,
-	INodeType,
-	INodeTypeDescription,
-	IDataObject,
-	NodeConnectionTypes,
-	NodeOperationError,
-} from 'n8n-workflow';
+// Types only: nothing from n8n-workflow is loaded at run time, so the package
+// has no dependencies at all, peer ones included. A peer dependency made npm
+// install (or, with --legacy-peer-deps, remove) a second n8n-workflow copy in
+// n8n's community-node folder, and pulled n8n-workflow's whole tree into
+// supply-chain scanners' view of this package.
+import type { IExecuteFunctions, INodeExecutionData, INodeType, INodeTypeDescription, IDataObject } from 'n8n-workflow';
 
-import { AttachmentError, AttachmentInfo, sniff, toContentBlock } from './attachments';
-import { buildStreamArgs, CliError, extractJson, runClaudeStream } from './cli';
+import { AttachmentError, AttachmentInfo, convertToJpeg, sniff, toContentBlock } from './attachments';
+import { buildStreamArgs, CliError, extractJson, JsonParseError, runClaudeStream } from './cli';
+
+// A setup mistake on the node or the item (missing binary field and the like).
+// Never retried. n8n wraps any thrown Error into its own node error.
+class ConfigError extends Error {}
+
+const itemLabel = (i: number, total: number) => (total > 1 ? ` [item ${i}]` : '');
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) return reject(new CliError('Execution was cancelled', '', true));
+		const onAbort = () => {
+			clearTimeout(t);
+			reject(new CliError('Execution was cancelled', '', true));
+		};
+		const t = setTimeout(() => {
+			signal?.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		signal?.addEventListener('abort', onAbort, { once: true });
+	});
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -80,8 +98,8 @@ export class ClaudeCliBridge implements INodeType {
 		description:
 			'Call the locally-installed, subscription-authenticated Claude CLI directly (no Anthropic API key). Version 2 sends images, PDFs and text files to Claude as they are.',
 		defaults: { name: 'Claude CLI' },
-		inputs: [NodeConnectionTypes.Main],
-		outputs: [NodeConnectionTypes.Main],
+		inputs: ['main'],
+		outputs: ['main'],
 		credentials: [
 			{
 				name: 'claudeCliBridgeApi',
@@ -232,6 +250,37 @@ export class ClaudeCliBridge implements INodeType {
 						description: 'Passed as --effort: how much the model thinks before answering. Higher is slower and uses more of the subscription quota.',
 					},
 					{
+						displayName: 'Retries',
+						name: 'retries',
+						type: 'number',
+						typeOptions: { minValue: 0, maxValue: 5 },
+						default: 0,
+						description:
+							'How many times to run the CLI again when it fails or the answer is not valid JSON. Works with Continue On Fail too, unlike n8n\'s own Retry On Fail. File and setup errors are not retried.',
+					},
+					{
+						displayName: 'Retry Wait (ms)',
+						name: 'retryWaitMs',
+						type: 'number',
+						default: 5000,
+						description: 'Pause before each retry',
+					},
+					{
+						displayName: 'Convert HEIC/AVIF',
+						name: 'convertHeic',
+						type: 'boolean',
+						default: true,
+						description:
+							'Whether to convert HEIC/HEIF/AVIF attachments (iPhone photos) to JPEG with GraphicsMagick before sending them. Claude does not accept these formats. The official n8n Docker image includes GraphicsMagick.',
+					},
+					{
+						displayName: 'GraphicsMagick Path',
+						name: 'gmPath',
+						type: 'string',
+						default: 'gm',
+						description: 'The gm binary used for HEIC/AVIF conversion',
+					},
+					{
 						displayName: 'Max Turns',
 						name: 'maxTurns',
 						type: 'number',
@@ -309,7 +358,7 @@ async function executeV1(this: IExecuteFunctions): Promise<INodeExecutionData[][
 				});
 				continue;
 			}
-			throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: i });
+			throw new Error((error as Error).message + itemLabel(i, items.length));
 		}
 	}
 
@@ -333,6 +382,7 @@ async function executeV2(this: IExecuteFunctions): Promise<INodeExecutionData[][
 			pairedItem: { item: i },
 		});
 		let output = '';
+		let attempts = 0;
 		const attachments: AttachmentInfo[] = [];
 
 		try {
@@ -352,21 +402,29 @@ async function executeV2(this: IExecuteFunctions): Promise<INodeExecutionData[][
 								.map((s) => s.trim())
 								.filter(Boolean);
 				if (fields.length === 0) {
-					throw new NodeOperationError(this.getNode(), 'No binary data to attach on this item', { itemIndex: i });
+					throw new ConfigError('No binary data to attach on this item');
 				}
 				for (const field of fields) {
 					const meta = items[i].binary?.[field];
 					if (!meta) {
-						throw new NodeOperationError(
-							this.getNode(),
-							`Binary field "${field}" not found (item has: ${available.join(', ') || 'none'})`,
-							{ itemIndex: i },
-						);
+						throw new ConfigError(`Binary field "${field}" not found (item has: ${available.join(', ') || 'none'})`);
 					}
-					const buf = await this.helpers.getBinaryDataBuffer(i, field);
-					const s = sniff(buf, meta.mimeType);
+					let buf = await this.helpers.getBinaryDataBuffer(i, field);
+					let s = sniff(buf, meta.mimeType);
+					let convertedFrom: string | undefined;
+					if (s.convertFrom) {
+						if (options.convertHeic === false) {
+							throw new AttachmentError(
+								`${s.convertFrom.toUpperCase()} images are not accepted by Claude, and Options → Convert HEIC/AVIF is off.`,
+							);
+						}
+						const gmPath = ((options.gmPath as string) || 'gm').trim();
+						convertedFrom = s.convertFrom;
+						buf = await convertToJpeg(buf, s.convertFrom, gmPath, 60000);
+						s = { kind: 'image', mediaType: 'image/jpeg' };
+					}
 					content.push(toContentBlock(buf, s, meta.fileName));
-					attachments.push({ field, fileName: meta.fileName, kind: s.kind, mediaType: s.mediaType, bytes: buf.length });
+					attachments.push({ field, fileName: meta.fileName, kind: s.kind, mediaType: s.mediaType, bytes: buf.length, ...(convertedFrom ? { convertedFrom } : {}) });
 				}
 			}
 			content.push({ type: 'text', text: prompt });
@@ -379,47 +437,60 @@ async function executeV2(this: IExecuteFunctions): Promise<INodeExecutionData[][
 				maxTurns: options.maxTurns as number | undefined,
 				effort: (options.effort as string) || undefined,
 			});
-			const r = await runClaudeStream({
-				cliPath,
-				args,
-				env,
-				cwd: ((options.workingDirectory as string) || '').trim() || os.tmpdir(),
-				content,
-				timeoutMs: (options.timeout as number) || 180000,
-				signal,
-			});
-			output = r.text;
-			if (r.isError) {
-				// An auth failure comes back as subtype 'success' with is_error set;
-				// only a real error subtype (error_max_turns, ...) is worth naming.
-				const kind = r.subtype && r.subtype !== 'success' ? ` (${r.subtype})` : '';
-				throw new CliError(`Claude CLI reported an error${kind}: ${r.text || 'no message'}`, r.stderr);
+			// Retried: a CLI failure (no result, error result, timeout) and an answer
+			// that is not valid JSON when JSON was asked for. Not retried: setup and
+			// file errors (they fail the same way every time) and a cancelled run.
+			// n8n's own Retry On Fail never fires under Continue On Fail, because
+			// the error is turned into an output item here instead of thrown.
+			const retries = Math.max(0, Math.min(5, Math.floor(Number(options.retries) || 0)));
+			const retryWaitMs = Math.max(0, Number(options.retryWaitMs ?? 5000) || 0);
+			for (;;) {
+				attempts++;
+				try {
+					const r = await runClaudeStream({
+						cliPath,
+						args,
+						env,
+						cwd: ((options.workingDirectory as string) || '').trim() || os.tmpdir(),
+						content,
+						timeoutMs: (options.timeout as number) || 180000,
+						signal,
+					});
+					output = r.text;
+					if (r.isError) {
+						// An auth failure comes back as subtype 'success' with is_error set;
+						// only a real error subtype (error_max_turns, ...) is worth naming.
+						const kind = r.subtype && r.subtype !== 'success' ? ` (${r.subtype})` : '';
+						throw new CliError(`Claude CLI reported an error${kind}: ${r.text || 'no message'}`, r.stderr);
+					}
+					const json: IDataObject = {
+						success: true,
+						output: r.text,
+						model: r.model,
+						durationMs: r.durationMs,
+						costUsd: r.costUsd,
+						usage: r.usage as IDataObject,
+						attempts,
+						attachments: attachments as unknown as IDataObject[],
+					};
+					if (responseFormat === 'json') json.data = extractJson(r.text) as IDataObject;
+					returnData.push(base(json));
+					break;
+				} catch (error) {
+					const retryable = (error instanceof CliError && !error.cancelled) || error instanceof JsonParseError;
+					if (!retryable || attempts > retries) throw error;
+					await sleep(retryWaitMs, signal);
+				}
 			}
-
-			const json: IDataObject = {
-				success: true,
-				output: r.text,
-				model: r.model,
-				durationMs: r.durationMs,
-				costUsd: r.costUsd,
-				usage: r.usage as IDataObject,
-				attachments: attachments as unknown as IDataObject[],
-			};
-			if (responseFormat === 'json') json.data = extractJson(r.text) as IDataObject;
-			returnData.push(base(json));
 		} catch (error) {
-			const message =
-				error instanceof AttachmentError || error instanceof CliError || error instanceof NodeOperationError
-					? error.message
-					: (error as Error).message;
+			const message = (error as Error).message;
 			if (this.continueOnFail()) {
 				returnData.push(
-					base({ success: false, output, error: message, attachments: attachments as unknown as IDataObject[] }),
+					base({ success: false, output, error: message, attempts, attachments: attachments as unknown as IDataObject[] }),
 				);
 				continue;
 			}
-			if (error instanceof NodeOperationError) throw error;
-			throw new NodeOperationError(this.getNode(), message, { itemIndex: i });
+			throw new Error(message + itemLabel(i, items.length));
 		}
 	}
 
