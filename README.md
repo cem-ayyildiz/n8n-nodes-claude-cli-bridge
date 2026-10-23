@@ -8,7 +8,10 @@ The official Anthropic n8n node requires an API key (pay-per-token billing). Thi
 
 ## How it works
 
-There is no bridge/server process. The node's `execute()` runs `claude -p "<prompt>"` as a child process of the n8n worker itself and returns `{ success, output, error }`.
+There is no bridge/server process. The node runs the `claude` CLI as a child process of the n8n worker itself.
+
+- **Version 2** (default for new nodes) feeds the CLI one message on stdin with `--input-format stream-json`. That is what lets a message carry **images and PDFs as they are**: the binary data of the item goes to Claude as image / document blocks, so Claude reads the picture or the PDF pages itself instead of a text extraction. It returns the answer, optionally parsed as JSON, plus model, duration, cost and token usage.
+- **Version 1** (existing nodes) is unchanged: `claude -p "<prompt>"`, with an optional `pdftotext` extraction appended to the prompt.
 
 - **n8n running on bare metal/VM** (no Docker): works out of the box as long as `claude` is on `PATH` and logged in as the user running n8n.
 - **n8n running in Docker**: see the full setup below — this is the path that's actually been tested end-to-end.
@@ -27,8 +30,37 @@ Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-c
 |---|---|
 | CLI Path | Path to the `claude` binary, or just `claude` if it's on `PATH`. Falls back to the `CLAUDE_CLI_PATH` env var, then `"claude"`. |
 | Home Directory | Directory containing `.claude/` with login credentials. Leave empty to use the process `HOME`. For the Docker setup below, this is `/home/node`. |
+| Config Directory | Optional `CLAUDE_CONFIG_DIR`. Leave empty for `<Home Directory>/.claude`. |
+| OAuth Token | Optional long-lived token from `claude setup-token`, passed as `CLAUDE_CODE_OAUTH_TOKEN`. Leave empty to use the stored login, or a `CLAUDE_CODE_OAUTH_TOKEN` already set on the n8n process. |
 
 ## Node: Claude CLI
+
+### Version 2
+
+| Field | Description |
+|---|---|
+| Prompt | The instruction. Attachments are sent before it in the same message. |
+| Model | Optional `--model`, e.g. `claude-sonnet-5-5` |
+| Attachments | `None`, `Selected Binary Fields` (comma-separated names, default `data`) or `All Binary Fields` |
+| Response Format | `Text`, or `JSON`: the answer is parsed into `data` (a ```` ```json ```` fence or surrounding prose is tolerated) |
+| Options → System Prompt / Mode | Appended to, or replacing, Claude Code's default system prompt |
+| Options → Tools | `None (Pure Model Call)` (default) or `CLI Defaults` |
+| Options → Max Turns, Timeout, Working Directory, Keep Binary Data | as named |
+
+**Attachments.** The type is detected from the file bytes, not the declared mime type (mobile/web uploads often label every file `image/jpeg`, a PDF included):
+
+| Detected | Sent as | Limit |
+|---|---|---|
+| JPEG, PNG, GIF, WEBP | image block | 5 MB per image |
+| PDF | document block (Claude sees the pages) | 32 MB |
+| `text/*`, JSON, CSV, XML, YAML (by declared mime) | text document block | 2 MB |
+| HEIC / AVIF | rejected with a hint to convert to JPEG (Edit Image node) | |
+
+**Tools = None** runs the CLI with `--tools "" --strict-mcp-config --setting-sources "" --disable-slash-commands`: no built-in tools, no MCP servers, no settings files (so no hooks), no skills. Without this the CLI inherits whatever its user configured; on a workstation with several MCP servers a one-line answer took 26 s instead of ~3 s.
+
+**Output** (`json`): `success`, `output` (answer text), `data` (parsed JSON, when asked), `model`, `durationMs`, `costUsd`, `usage`, `attachments` (`field`, `fileName`, `kind`, `mediaType`, `bytes`). Input binary data is passed through unless *Keep Binary Data* is off. With *Continue On Fail*, errors come back as `success: false` with `error`.
+
+### Version 1
 
 | Field | Description |
 |---|---|
@@ -37,6 +69,10 @@ Or via the n8n UI: **Settings → Community Nodes → Install** → `n8n-nodes-c
 | Attach PDF | Extracts text from a binary PDF input (via `pdftotext`, if installed) and appends it to the prompt |
 | Input Binary Field | Name of the binary property holding the PDF (default `data`) |
 | Timeout (ms) | Kills the `claude` process if it runs longer than this |
+
+### Testing outside n8n
+
+`npm run build`, then use `test/harness.js`: it runs the compiled node against the real `claude` CLI on the machine with a minimal stand-in for n8n's execute context.
 
 ## Running n8n in Docker (tested, recommended setup)
 

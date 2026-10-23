@@ -1,12 +1,14 @@
 {
   "name": "n8n-nodes-claude-cli-bridge",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "n8n community node that calls the locally-installed, subscription-authenticated Claude CLI directly — no Anthropic API key, no separate server process",
   "keywords": [
     "n8n-community-node-package",
     "claude",
     "anthropic",
-    "claude-code"
+    "claude-code",
+    "vision",
+    "pdf"
   ],
   "license": "MIT",
   "homepage": "https://github.com/cem-ayyildiz/n8n-nodes-claude-cli-bridge",
